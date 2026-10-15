@@ -74,7 +74,7 @@ st.markdown("""
         transform: scale(0.98) !important;
     }
 
-    /* Responsive, beautiful Markdown Table */
+    /* Responsive Markdown Table */
     .stMarkdown table {
         width: 100% !important;
         border-collapse: separate !important;
@@ -110,23 +110,12 @@ st.markdown("""
         overflow-x: auto !important;
         -webkit-overflow-scrolling: touch;
     }
-
-    /* PWA Card Guide */
-    .pwa-tip {
-        background-color: #f0fdf4;
-        border: 1px solid #bbf7d0;
-        border-radius: 12px;
-        padding: 0.85rem 1rem;
-        margin-bottom: 1.25rem;
-        font-size: 0.88rem;
-        color: #166534;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 
 # --- 3. Backend Gemini API Key Configuration ---
-# Admin can optionally hardcode the API key below or set it in .streamlit/secrets.toml / environment variables.
+# Admin can optionally set the API key in .streamlit/secrets.toml or as an environment variable.
 # Parents and general users will NEVER see this key in the UI.
 BACKEND_GEMINI_API_KEY = ""
 
@@ -157,8 +146,15 @@ def get_backend_api_key():
     return None
 
 
-# --- 4. YouTube Anti-Bot & Downloader Logic ---
-def get_yt_dlp_options(output_template="temp_video_%(ext)s", cookie_file=None, browser_choice=None):
+# --- 4. YouTube Anti-Bot & Downloader Logic (Auto cookies.txt) ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+COOKIES_PATH = os.path.join(BASE_DIR, "cookies.txt")
+
+def get_yt_dlp_options(output_template="temp_video_%(ext)s"):
+    """
+    Configures yt-dlp with anti-bot mobile/TV player clients and automatically
+    attaches cookies.txt if present in the same directory.
+    """
     ydl_opts = {
         'format': 'best[ext=mp4]/best',
         'outtmpl': output_template,
@@ -185,15 +181,17 @@ def get_yt_dlp_options(output_template="temp_video_%(ext)s", cookie_file=None, b
         }
     }
 
-    if cookie_file and os.path.exists(cookie_file):
-        ydl_opts['cookiefile'] = cookie_file
-    elif browser_choice and browser_choice.lower() in ['chrome', 'edge', 'firefox', 'brave']:
-        ydl_opts['cookiesfrombrowser'] = (browser_choice.lower(),)
+    # Automatically use cookies.txt if present in the same directory
+    if os.path.exists(COOKIES_PATH):
+        ydl_opts['cookiefile'] = COOKIES_PATH
 
     return ydl_opts
 
-def download_video(url, output_template="temp_video_%(ext)s", cookie_file=None, browser_choice=None):
-    ydl_opts = get_yt_dlp_options(output_template, cookie_file, browser_choice)
+def download_video(url, output_template="temp_video_%(ext)s"):
+    """
+    Downloads video using yt-dlp with anti-bot arguments, auto cookies, and fallback.
+    """
+    ydl_opts = get_yt_dlp_options(output_template)
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -203,13 +201,8 @@ def download_video(url, output_template="temp_video_%(ext)s", cookie_file=None, 
             raise RuntimeError("Video download hui lekin disk par dastyab nahi hai.")
     except Exception as primary_error:
         err_str = str(primary_error)
-        
-        # Graceful fallback for Windows DPAPI browser lock
-        if "Failed to decrypt with DPAPI" in err_str or "Could not copy Chrome cookie database" in err_str:
-            st.warning("⚠️ Browser cookies direct access block hai. Baghair cookies ke dobara try kar rahe hain...")
-            return download_video(url, output_template=output_template, cookie_file=cookie_file, browser_choice=None)
 
-        # Fallback with mobile-only clients
+        # Fallback with mobile-only client profile
         try:
             fallback_opts = ydl_opts.copy()
             fallback_opts['extractor_args'] = {
@@ -229,7 +222,7 @@ def download_video(url, output_template="temp_video_%(ext)s", cookie_file=None, 
         if "Sign in to confirm you’re not a bot" in err_str or "bot" in err_str.lower() or "429" in err_str:
             raise RuntimeError(
                 "YouTube Bot Protection: YouTube ne download ko block kar diya.\n"
-                "Hal: Video ko direct browser se download kar ke file upload karein ya cookies.txt use karein."
+                "Hal: Video ko direct browser se download kar ke file upload karein ya cookies.txt update karein."
             )
         elif "This video is not available" in err_str or "Video unavailable" in err_str:
             raise RuntimeError("Yeh video YouTube par dastyab nahi hai ya restrict ho chuki hai.")
@@ -239,7 +232,7 @@ def download_video(url, output_template="temp_video_%(ext)s", cookie_file=None, 
             raise RuntimeError(f"Video download nahi ho saki: {primary_error}")
 
 
-# --- 5. Clean, Mobile-First UI Layout ---
+# --- 5. Clean, Parent-Focused UI Layout ---
 st.markdown("""
 <div class="hero-card">
     <h1 class="hero-title">🛡️ Islamic Kids Media Analyzer</h1>
@@ -261,33 +254,9 @@ with st.expander("📲 Mobile App Ki Tarah Install Karein (Home Screen Shortcut)
     *Iske baad yeh app aapke mobile par bilkul native app ki tarah open hogi.*
     """)
 
-# User inputs
+# User inputs: Only YouTube Link and Direct Video File Upload
 video_url = st.text_input("🔗 Video Link Paste Karein (YouTube, etc.):", placeholder="https://www.youtube.com/watch?v=...")
 uploaded_file = st.file_uploader("📁 Ya Direct Video File Upload Karein (MP4 / WebM)", type=["mp4", "webm", "mov", "mkv"])
-
-# Optional Anti-Bot & Cookies Settings (Hidden in neat expander)
-has_local_cookies = os.path.exists("cookies.txt")
-with st.expander("⚙️ Advanced Settings & Cookies (Optional)", expanded=False):
-    st.caption("Agar kisi specific video par YouTube bot detection aaye to cookies configure karein:")
-    if has_local_cookies:
-        st.info("ℹ️ Local `cookies.txt` file mojood hai.")
-    cookie_mode = st.radio(
-        "Cookie Source:",
-        [
-            "Auto Extractor Args (Recommended)",
-            "Local cookies.txt" if has_local_cookies else None,
-            "Upload cookies.txt file",
-            "Browser Cookies (Edge / Chrome)"
-        ],
-        index=0 if not has_local_cookies else 1,
-        format_func=lambda x: str(x)
-    )
-    uploaded_cookie_file = None
-    selected_browser = None
-    if cookie_mode == "Upload cookies.txt file":
-        uploaded_cookie_file = st.file_uploader("Upload cookies.txt", type=["txt"])
-    elif cookie_mode == "Browser Cookies (Edge / Chrome)":
-        selected_browser = st.selectbox("Browser select karein:", ["Edge", "Chrome", "Firefox"])
 
 st.write("") # Spacing
 
@@ -304,20 +273,11 @@ if st.button("🔍 Video Analyze Karein", type="primary", use_container_width=Tr
         st.error("⚠️ Barah-e-karam video ka link paste karein ya direct file upload karein.")
     else:
         video_path = None
-        temp_cookie_path = None
         gemini_file = None
         client = None
         timestamp = int(time.time())
 
         try:
-            # Cookie file setup
-            if uploaded_cookie_file is not None:
-                temp_cookie_path = f"temp_cookies_{timestamp}.txt"
-                with open(temp_cookie_path, "wb") as f:
-                    f.write(uploaded_cookie_file.getbuffer())
-            elif cookie_mode == "Local cookies.txt" and has_local_cookies:
-                temp_cookie_path = "cookies.txt"
-
             # Download or save video
             with st.spinner("⏳ Video download aur analyze ke liye prepare ho rahi hai..."):
                 if uploaded_file:
@@ -328,9 +288,7 @@ if st.button("🔍 Video Analyze Karein", type="primary", use_container_width=Tr
                 else:
                     video_path = download_video(
                         video_url.strip(),
-                        output_template=f"temp_video_{timestamp}.%(ext)s",
-                        cookie_file=temp_cookie_path,
-                        browser_choice=selected_browser
+                        output_template=f"temp_video_{timestamp}.%(ext)s"
                     )
 
             if not video_path or not os.path.exists(video_path):
@@ -405,12 +363,5 @@ if st.button("🔍 Video Analyze Karein", type="primary", use_container_width=Tr
             if video_path and os.path.exists(video_path):
                 try:
                     os.remove(video_path)
-                except Exception:
-                    pass
-
-            # Guaranteed cleanup of temporary cookie file
-            if temp_cookie_path and temp_cookie_path.startswith("temp_cookies_") and os.path.exists(temp_cookie_path):
-                try:
-                    os.remove(temp_cookie_path)
                 except Exception:
                     pass
