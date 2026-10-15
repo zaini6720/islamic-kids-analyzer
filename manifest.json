@@ -1,0 +1,16 @@
+{
+  "short_name": "KidsAnalyzer",
+  "name": "Islamic Kids Media Analyzer",
+  "icons": [
+    {
+      "src": "https://api.iconify.design/noto:shield.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#ffffff",
+  "theme_color": "#059669",
+  "display": "standalone",
+  "orientation": "portrait"
+}

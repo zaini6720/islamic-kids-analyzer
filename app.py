@@ -148,9 +148,16 @@ def get_backend_api_key():
 
 # --- 4. YouTube Anti-Bot & Downloader Logic (Auto cookies.txt) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-COOKIES_PATH = os.path.join(BASE_DIR, "cookies.txt")
 
-def get_yt_dlp_options(output_template="temp_video_%(ext)s"):
+def get_cookie_file():
+    """Detects cookies.txt or cookies.txt.txt in the project directory."""
+    for name in ["cookies.txt", "cookies.txt.txt"]:
+        path = os.path.join(BASE_DIR, name)
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            return path
+    return None
+
+def get_yt_dlp_options(output_template="temp_video_%(ext)s", use_cookies=True):
     """
     Configures yt-dlp with anti-bot mobile/TV player clients and automatically
     attaches cookies.txt if present in the same directory.
@@ -181,17 +188,18 @@ def get_yt_dlp_options(output_template="temp_video_%(ext)s"):
         }
     }
 
-    # Automatically use cookies.txt if present in the same directory
-    if os.path.exists(COOKIES_PATH):
-        ydl_opts['cookiefile'] = COOKIES_PATH
+    if use_cookies:
+        cookie_file = get_cookie_file()
+        if cookie_file:
+            ydl_opts['cookiefile'] = cookie_file
 
     return ydl_opts
 
 def download_video(url, output_template="temp_video_%(ext)s"):
     """
-    Downloads video using yt-dlp with anti-bot arguments, auto cookies, and fallback.
+    Downloads video using yt-dlp with anti-bot arguments, auto cookies, and fallback to bypass 403 errors.
     """
-    ydl_opts = get_yt_dlp_options(output_template)
+    ydl_opts = get_yt_dlp_options(output_template, use_cookies=True)
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -202,9 +210,9 @@ def download_video(url, output_template="temp_video_%(ext)s"):
     except Exception as primary_error:
         err_str = str(primary_error)
 
-        # Fallback with mobile-only client profile
+        # Fallback 1: Try with focused mobile clients (Android/iOS) to bypass 403 / PO-Token restrictions
         try:
-            fallback_opts = ydl_opts.copy()
+            fallback_opts = get_yt_dlp_options(output_template, use_cookies=True)
             fallback_opts['extractor_args'] = {
                 'youtube': {
                     'player_client': ['android', 'ios'],
@@ -219,7 +227,23 @@ def download_video(url, output_template="temp_video_%(ext)s"):
         except Exception:
             pass
 
-        if "Sign in to confirm you’re not a bot" in err_str or "bot" in err_str.lower() or "429" in err_str:
+        # Fallback 2: If cookies were invalid/expired causing HTTP 403 Forbidden, retry without cookies
+        try:
+            no_cookie_opts = get_yt_dlp_options(output_template, use_cookies=False)
+            with yt_dlp.YoutubeDL(no_cookie_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                downloaded_path = ydl.prepare_filename(info)
+                if os.path.exists(downloaded_path) and os.path.getsize(downloaded_path) > 0:
+                    return downloaded_path
+        except Exception:
+            pass
+
+        if "403" in err_str or "Forbidden" in err_str:
+            raise RuntimeError(
+                "YouTube HTTP Error 403 (Forbidden): YouTube ne access block kar diya hai.\n"
+                "Barah-e-karam video ko direct browser se download kar ke upar 'Direct Video File Upload' ke zariye upload karein."
+            )
+        elif "Sign in to confirm you’re not a bot" in err_str or "bot" in err_str.lower() or "429" in err_str:
             raise RuntimeError(
                 "YouTube Bot Protection: YouTube ne download ko block kar diya.\n"
                 "Hal: Video ko direct browser se download kar ke file upload karein ya cookies.txt update karein."

@@ -1,0 +1,11 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Temporary files
+temp_*
+app_backup.py
