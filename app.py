@@ -146,8 +146,14 @@ def get_backend_api_key():
     return None
 
 
-# --- 4. YouTube Anti-Bot & Downloader Logic (Auto cookies.txt) ---
+# --- 4. YouTube Anti-Bot & Downloader Logic (Aggressive Bypass) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+try:
+    from yt_dlp.networking.impersonate import ImpersonateTarget
+    IMPERSONATE_AVAILABLE = True
+except Exception:
+    IMPERSONATE_AVAILABLE = False
 
 def get_cookie_file():
     """Detects cookies.txt or cookies.txt.txt in the project directory."""
@@ -157,11 +163,18 @@ def get_cookie_file():
             return path
     return None
 
-def get_yt_dlp_options(output_template="temp_video_%(ext)s", use_cookies=True):
+def get_yt_dlp_options(output_template="temp_video_%(ext)s", use_cookies=True, client_profile=None):
     """
-    Configures yt-dlp with anti-bot mobile/TV player clients and automatically
-    attaches cookies.txt if present in the same directory.
+    Configures yt-dlp with aggressive anti-bot bypass methods:
+    - Impersonation: Real Chrome browser TLS fingerprinting
+    - Skip webpage & configs: Prevents triggering datacenter IP bot detection
+    - Mobile & TV InnerTube client APIs
+    - Geo-bypass enabled
+    - Automatic cookiefile detection
     """
+    if client_profile is None:
+        client_profile = ['android', 'ios', 'tv_downgraded', 'web_creator', 'mweb']
+
     ydl_opts = {
         'format': 'best[ext=mp4]/best',
         'outtmpl': output_template,
@@ -170,23 +183,30 @@ def get_yt_dlp_options(output_template="temp_video_%(ext)s", use_cookies=True):
         'no_warnings': False,
         'noplaylist': True,
         'socket_timeout': 30,
-        'retries': 3,
-        'fragment_retries': 3,
+        'retries': 5,
+        'fragment_retries': 5,
         'no_color': True,
         'geo_bypass': True,
+        'geo_bypass_country': 'US',
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
             'Sec-Fetch-Mode': 'navigate',
         },
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'ios', 'tv_downgraded', 'web_creator', 'mweb'],
-                'player_skip': ['webpage', 'configs'],
+                'player_client': client_profile,
+                'player_skip': ['webpage', 'configs', 'initial_data'],
             }
         }
     }
+
+    if IMPERSONATE_AVAILABLE:
+        try:
+            ydl_opts['impersonate'] = ImpersonateTarget.from_str('chrome')
+        except Exception:
+            pass
 
     if use_cookies:
         cookie_file = get_cookie_file()
@@ -197,63 +217,51 @@ def get_yt_dlp_options(output_template="temp_video_%(ext)s", use_cookies=True):
 
 def download_video(url, output_template="temp_video_%(ext)s"):
     """
-    Downloads video using yt-dlp with anti-bot arguments, auto cookies, and fallback to bypass 403 errors.
+    Downloads video using a multi-tiered aggressive bypass pipeline:
+    1. Primary: Chrome TLS impersonation + mobile/TV clients + webpage/configs skipped + cookies
+    2. Fallback 1: Pure mobile protobuf clients (Android/iOS) + webpage skipped
+    3. Fallback 2: TV downgraded client profile without cookies (to bypass flagged session cookies)
     """
-    ydl_opts = get_yt_dlp_options(output_template, use_cookies=True)
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            downloaded_path = ydl.prepare_filename(info)
-            if os.path.exists(downloaded_path) and os.path.getsize(downloaded_path) > 0:
-                return downloaded_path
-            raise RuntimeError("Video download hui lekin disk par dastyab nahi hai.")
-    except Exception as primary_error:
-        err_str = str(primary_error)
+    strategies = [
+        {"use_cookies": True, "clients": ['android', 'ios', 'tv_downgraded', 'web_creator', 'mweb']},
+        {"use_cookies": True, "clients": ['android', 'ios']},
+        {"use_cookies": False, "clients": ['tv_downgraded', 'android']},
+    ]
 
-        # Fallback 1: Try with focused mobile clients (Android/iOS) to bypass 403 / PO-Token restrictions
+    last_error = None
+    for strat in strategies:
         try:
-            fallback_opts = get_yt_dlp_options(output_template, use_cookies=True)
-            fallback_opts['extractor_args'] = {
-                'youtube': {
-                    'player_client': ['android', 'ios'],
-                    'player_skip': ['webpage']
-                }
-            }
-            with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+            opts = get_yt_dlp_options(
+                output_template=output_template,
+                use_cookies=strat["use_cookies"],
+                client_profile=strat["clients"]
+            )
+            with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 downloaded_path = ydl.prepare_filename(info)
                 if os.path.exists(downloaded_path) and os.path.getsize(downloaded_path) > 0:
                     return downloaded_path
-        except Exception:
-            pass
+        except Exception as e:
+            last_error = e
+            continue
 
-        # Fallback 2: If cookies were invalid/expired causing HTTP 403 Forbidden, retry without cookies
-        try:
-            no_cookie_opts = get_yt_dlp_options(output_template, use_cookies=False)
-            with yt_dlp.YoutubeDL(no_cookie_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                downloaded_path = ydl.prepare_filename(info)
-                if os.path.exists(downloaded_path) and os.path.getsize(downloaded_path) > 0:
-                    return downloaded_path
-        except Exception:
-            pass
-
-        if "403" in err_str or "Forbidden" in err_str:
-            raise RuntimeError(
-                "YouTube HTTP Error 403 (Forbidden): YouTube ne access block kar diya hai.\n"
-                "Barah-e-karam video ko direct browser se download kar ke upar 'Direct Video File Upload' ke zariye upload karein."
-            )
-        elif "Sign in to confirm you’re not a bot" in err_str or "bot" in err_str.lower() or "429" in err_str:
-            raise RuntimeError(
-                "YouTube Bot Protection: YouTube ne download ko block kar diya.\n"
-                "Hal: Video ko direct browser se download kar ke file upload karein ya cookies.txt update karein."
-            )
-        elif "This video is not available" in err_str or "Video unavailable" in err_str:
-            raise RuntimeError("Yeh video YouTube par dastyab nahi hai ya restrict ho chuki hai.")
-        elif "Private video" in err_str or "Sign in" in err_str:
-            raise RuntimeError("Yeh video private ya age-restricted hai.")
-        else:
-            raise RuntimeError(f"Video download nahi ho saki: {primary_error}")
+    err_str = str(last_error) if last_error else "Unknown error"
+    if "403" in err_str or "Forbidden" in err_str:
+        raise RuntimeError(
+            "YouTube HTTP Error 403 (Forbidden): Datacenter IP block.\n"
+            "Barah-e-karam video ko direct browser se download kar ke upar 'Direct Video File Upload' ke zariye upload karein."
+        )
+    elif "Sign in to confirm you’re not a bot" in err_str or "bot" in err_str.lower() or "429" in err_str:
+        raise RuntimeError(
+            "YouTube Bot Protection: Streamlit Cloud IP YouTube ki taraf se block hai.\n"
+            "Hal: Video ko direct browser se download kar ke 'Direct Video File Upload' ke zariye upload karein."
+        )
+    elif "This video is not available" in err_str or "Video unavailable" in err_str:
+        raise RuntimeError("Yeh video YouTube par dastyab nahi hai ya restrict ho chuki hai.")
+    elif "Private video" in err_str or "Sign in" in err_str:
+        raise RuntimeError("Yeh video private ya age-restricted hai.")
+    else:
+        raise RuntimeError(f"Video download nahi ho saki: {last_error}")
 
 
 # --- 5. Clean, Parent-Focused UI Layout ---
